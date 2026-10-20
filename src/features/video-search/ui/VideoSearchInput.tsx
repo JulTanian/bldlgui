@@ -13,8 +13,6 @@ import {
 } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router'
-import { invoke } from '@tauri-apps/api/core'
-import { listen } from '@tauri-apps/api/event'
 import type { SearchHistoryEntry } from '../api/searchHistory'
 import {
   clearSearchHistoryApi,
@@ -45,7 +43,6 @@ export function VideoSearchInput({
 }) {
   const { t } = useTranslation()
   const navigate = useNavigate()
-  const [spaceProgress, setSpaceProgress] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
   const [suggestions, setSuggestions] = useState<string[]>([])
   const [history, setHistory] = useState<SearchHistoryEntry[]>([])
@@ -160,76 +157,6 @@ export function VideoSearchInput({
     setDraft(keyword)
   }, [keyword])
 
-  // === HÀM XỬ LÝ TẢI TOÀN BỘ KÊNH (ĐÃ FIX LỖI TRÙNG TÊN) ===
-  const handleSpaceDownload = async (spaceUrl: string) => {
-    setSpaceProgress('Đang phân tích trang cá nhân...')
-    try {
-      const unlisten = await listen<any>('space-fetch-progress', (event) => {
-        const { page, fetched, total } = event.payload
-        setSpaceProgress(`Đang lấy trang ${page}... (${fetched}${total > 0 ? `/${total}` : ''} video)`)
-      })
-
-      const videos = await invoke<any[]>('fetch_all_space_videos', { midOrUrl: spaceUrl })
-      unlisten()
-
-      if (videos.length === 0) {
-        setSpaceProgress('Không tìm thấy video nào.')
-        return
-      }
-
-      setSpaceProgress(`Đã tìm thấy ${videos.length} video. Đang ném vào hàng đợi...`)
-      
-      for (let i = 0; i < videos.length; i++) {
-        const video = videos[i]
-        setSpaceProgress(`Đang chuẩn bị video ${i + 1}/${videos.length}...`)
-        
-        try {
-          const videoInfo = await Promise.race([
-            invoke<any>('fetch_video_info', { videoId: video.bvid }),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 5000))
-          ]) as any;
-
-          const part = videoInfo.parts[0]
-          const downloadId = `${video.bvid}-p1-${Date.now()}-${i}`
-
-          // Xử lý tên file: Xóa ký tự cấm và thêm BVID để chống trùng
-          const safeTitle = video.title
-            .replace(/[\\/:*?"<>|]/g, '_') // Thay thế ký tự cấm bằng gạch dưới
-            .substring(0, 100) // Cắt ngắn nếu tên quá dài
-          
-          const finalFilename = `${safeTitle} [${video.bvid}]`
-
-          await invoke('download_video', {
-            options: {
-              bvid: video.bvid,
-              cid: part.cid,
-              filename: finalFilename, // Dùng tên đã làm sạch
-              quality: null,
-              audioQuality: null,
-              downloadId: downloadId,
-              parentId: null,
-              durationSeconds: video.duration,
-              thumbnailUrl: video.cover,
-              page: 1,
-              subtitle: null,
-              epId: null,
-              outputDir: null, // Dùng thư mục mặc định trong Settings
-            }
-          })
-        } catch (err) {
-          console.warn(`Bỏ qua video ${video.bvid} do lỗi`, err)
-        }
-
-        // Nghỉ 1.5 giây để hệ thống kịp giải phóng file khóa (.lock)
-        await new Promise(r => setTimeout(r, 1500))
-      }
-      setSpaceProgress(`Đã ném thành công ${videos.length} video vào trang Downloads!`)
-      setTimeout(() => setSpaceProgress(null), 5000)
-    } catch (err: any) {
-      setSpaceProgress(`Lỗi: ${err.toString()}`)
-    }
-  }
-
   const submit = (keyword: string) => {
     clearTimeout(suggestTimer.current)
     latestRound.current++
@@ -238,16 +165,19 @@ export function VideoSearchInput({
 
     const trimmed = keyword.trim()
 
+    // CHUYỂN HƯỚNG LINK SPACE SANG TRANG FETCH
     if (trimmed.includes('space.bilibili.com')) {
-      void handleSpaceDownload(trimmed)
+      navigate({ pathname: '/video', search: `?url=${encodeURIComponent(trimmed)}` })
       return
     }
 
+    // CHUYỂN HƯỚNG LINK VIDEO SANG TRANG FETCH
     if (trimmed.includes('bilibili.com/video/') || trimmed.includes('b23.tv/')) {
       navigate({ pathname: '/video', search: `?url=${encodeURIComponent(trimmed)}` })
       return
     }
 
+    // NẾU LÀ TỪ KHÓA THÌ TÌM KIẾM BÌNH THƯỜNG
     void recordSearchApi(keyword).catch(() => {})
     onSearch(keyword)
   }
@@ -321,12 +251,6 @@ export function VideoSearchInput({
           {t('videoSearch.searchButton')}
         </Button>
       </form>
-
-      {spaceProgress && (
-        <div className="absolute top-full left-0 z-50 mt-2 w-full rounded-md border bg-popover p-3 text-sm text-blue-500 shadow-md">
-          {spaceProgress}
-        </div>
-      )}
 
       {dropdownOpen && (
         <ul
