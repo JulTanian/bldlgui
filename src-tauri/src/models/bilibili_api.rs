@@ -1002,6 +1002,73 @@ pub struct SupportFormat {
     pub display_desc: String,
 }
 
+// ============================================================================
+// Space (User Profile) Video List API
+// ============================================================================
+
+/// User space video list API response.
+///
+/// Endpoint: `https://api.bilibili.com/x/space/wbi/arc/search`
+/// (WBI-signed — unsigned requests are 412-blocked)
+#[derive(Debug, Clone, Deserialize)]
+pub struct SpaceArcSearchApiResponse {
+    pub code: i64,
+    #[serde(default)]
+    pub message: String,
+    #[serde(default)]
+    pub data: Option<SpaceArcSearchData>,
+}
+
+/// `data` object of the space video list response.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct SpaceArcSearchData {
+    #[serde(default)]
+    pub list: SpaceArcSearchList,
+    #[serde(default)]
+    pub page: SpaceArcSearchPage,
+}
+
+/// `data.list` object — carries the actual video array.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct SpaceArcSearchList {
+    #[serde(default)]
+    pub vlist: Vec<SpaceArcSearchItem>,
+}
+
+/// `data.page` object — pagination metadata.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct SpaceArcSearchPage {
+    #[serde(default)]
+    pub pn: i64,
+    #[serde(default)]
+    pub ps: i64,
+    /// Total video count of the uploader.
+    #[serde(default)]
+    pub count: i64,
+}
+
+/// One video in the uploader's space.
+///
+/// `length` is a "M:S" STRING here (like search), unlike popular's integer.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SpaceArcSearchItem {
+    #[serde(default)]
+    pub bvid: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub pic: String,
+    /// Duration as a "m:ss" STRING on this endpoint.
+    #[serde(default)]
+    pub length: String,
+    #[serde(default)]
+    pub created: i64,
+    #[serde(default)]
+    pub play: i64,
+    #[serde(default)]
+    pub description: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
