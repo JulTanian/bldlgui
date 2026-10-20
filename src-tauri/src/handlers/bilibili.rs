@@ -172,6 +172,7 @@ use crate::models::bilibili_api::{
     PopularApiResponse, SearchApiData, SearchApiResponse, SuggestApiResponse, UserApiResponse,
     WatchHistoryApiResponse, WebInterfaceApiResponse, WebInterfaceApiResponseData,
     XPlayerApiResponse, XPlayerApiResponseData, XPlayerApiResponseVideo,
+    SpaceArcSearchApiResponse, SpaceArcSearchItem,
 };
 use crate::models::cookie::CookieEntry;
 use crate::models::frontend_dto::{
