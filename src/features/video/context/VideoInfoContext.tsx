@@ -148,7 +148,7 @@ export function VideoInfoProvider({ children }: VideoInfoProviderProps) {
         })
       }
 
-                        // ==========================================
+                             // ==========================================
       // TÍCH HỢP TÍNH NĂNG TẢI TOÀN BỘ KÊNH (SPACE)
       // ==========================================
       if (url.includes('space.bilibili.com')) {
@@ -159,6 +159,7 @@ export function VideoInfoProvider({ children }: VideoInfoProviderProps) {
         try {
           toast.info('Đang lấy danh sách video từ kênh...', { duration: 3000 })
           
+          // 1. Lấy danh sách video (ĐÚNG CHUẨN 2 THAM SỐ)
           const videos = await invoke<any[]>('fetch_all_space_videos', {
             midOrUrl: url,
           })
@@ -173,6 +174,7 @@ export function VideoInfoProvider({ children }: VideoInfoProviderProps) {
           for (let i = 0; i < videos.length; i++) {
             const v = videos[i]
             try {
+              // 2. Lấy CID (ĐÚNG CHUẨN 2 THAM SỐ)
               const videoInfo = await invoke<any>('fetch_video_info', {
                 videoId: v.bvid,
               })
@@ -185,21 +187,23 @@ export function VideoInfoProvider({ children }: VideoInfoProviderProps) {
               const safeTitle = v.title.replace(/[\\/:*?"<>|]/g, '_').substring(0, 100)
               const downloadId = `${v.bvid}-p1-${Date.now()}-${i}`
 
-              // GỌI THẲNG BACKEND, KHÔNG DÙNG enqueueSession NỮA
+              // 3. Gọi tải xuống (ĐÚNG CHUẨN 2 THAM SỐ)
               await invoke('download_video', {
-                bvid: v.bvid,
-                cid: part.cid,
-                filename: safeTitle,
-                quality: null,
-                audioQuality: null,
-                downloadId: downloadId,
-                parentId: null,
-                durationSeconds: v.duration,
-                thumbnailUrl: v.cover,
-                page: 1,
-                subtitle: null,
-                epId: null,
-                outputDir: null,
+                options: {
+                  bvid: v.bvid,
+                  cid: part.cid,
+                  filename: safeTitle,
+                  quality: null,
+                  audioQuality: null,
+                  downloadId: downloadId,
+                  parentId: null,
+                  durationSeconds: v.duration,
+                  thumbnailUrl: v.cover,
+                  page: 1,
+                  subtitle: null,
+                  epId: null,
+                  outputDir: null,
+                }
               })
             } catch (err) {
               logger.warn(`Bỏ qua video ${v.bvid} do lỗi`, err)
