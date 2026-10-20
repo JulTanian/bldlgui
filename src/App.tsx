@@ -18,8 +18,6 @@ import '@/styles/global.css'
 import { useEffect } from 'react'
 import { Route, Routes } from 'react-router'
 
-// THÊM DÒNG NÀY:
-import { SpaceDownloader } from '@/components/SpaceDownloader'
 
 function App() {
   const theme = useSelector((state) => state.settings.theme) ?? 'light'
