@@ -8878,3 +8878,241 @@ async fn expand_short_url_with(client: Client, url: String) -> Result<String, St
 
     Ok(response.url().to_string())
 }
+// ============================================================================
+// Space (User Profile) Video List
+// ============================================================================
+
+/// Page size for space video list requests (Bilibili accepts up to 50).
+const SPACE_PAGE_SIZE: i64 = 30;
+
+/// Parses a `mid` from a space URL or bare numeric id.
+///
+/// Accepts `space.bilibili.com/123456`, `.../123456/video`, or `123456`.
+fn parse_space_mid(input: &str) -> Option<i64> {
+    let trimmed = input.trim();
+    if let Ok(mid) = trimmed.parse::<i64>() {
+        return Some(mid);
+    }
+    trimmed
+        .rsplit('/')
+        .find(|seg| !seg.is_empty() && seg.bytes().all(|b| b.is_ascii_digit()))
+        .and_then(|s| s.parse::<i64>().ok())
+}
+
+/// Builds the WBI-signed query for one space video-list page.
+fn signed_space_query(
+    mixin_key: &str,
+    mid: i64,
+    page: i64,
+) -> Vec<(String, String)> {
+    let mut params = BTreeMap::from([
+        ("mid".to_string(), mid.to_string()),
+        ("pn".to_string(), page.max(1).to_string()),
+        ("ps".to_string(), SPACE_PAGE_SIZE.to_string()),
+        ("order".to_string(), "pubdate".to_string()),
+        ("platform".to_string(), "web".to_string()),
+        ("web_location".to_string(), "1550101".to_string()),
+    ]);
+    let signature = crate::utils::wbi::generate_wbi_signature(&mut params, mixin_key);
+    // Why: generate_wbi_signature already inserts wts into `params`; only
+    // w_rid is appended — same pattern as fetch_wbi_view.
+    let mut query: Vec<(String, String)> = params.into_iter().collect();
+    query.push(("w_rid".to_string(), signature.w_rid));
+    query
+}
+
+/// Maps one `SpaceArcSearchItem` to the frontend search-card DTO.
+fn space_item_to_entry(i: SpaceArcSearchItem) -> SearchResultEntry {
+    SearchResultEntry {
+        title: unescape_title_entities(&i.title),
+        cover: normalize_cover_url(&i.pic),
+        bvid: i.bvid,
+        author: String::new(), // space list carries no per-item author name
+        play: i.play,
+        duration: duration_seconds(Some(&serde_json::Value::String(i.length))),
+        typeid: String::new(),
+        typename: String::new(),
+    }
+}
+
+/// Translates the space API's business codes into the project's ERR:: codes.
+fn validate_space_response(code: i64, message: &str) -> Result<(), String> {
+    match code {
+        0 => Ok(()),
+        -101 => Err("ERR::UNAUTHORIZED".into()),
+        // -412 / -352 are risk-control blocks: same handling as search.
+        -412 | -352 => Err("ERR::RATE_LIMITED".into()),
+        _ => Err(format!("Space API error (code {code}): {message}")),
+    }
+}
+
+/// Fetches one page of an uploader's videos, returning `(entries, total)`.
+///
+/// `total == 0` means the API omitted the uploader's video count; callers
+/// then stop on a short page instead.
+async fn fetch_space_page_with(
+    api: &BiliApi,
+    mid: i64,
+    page: i64,
+) -> Result<(Vec<SearchResultEntry>, i64), String> {
+    let mixin_key = crate::utils::wbi::fetch_mixin_key(
+        &api.http,
+        &api.base,
+        (!api.cookie_header.is_empty()).then_some(&api.cookie_header),
+    )
+    .await?;
+
+    let query = signed_space_query(&mixin_key, mid, page);
+    let borrowed: Vec<(&str, String)> = query
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.clone()))
+        .collect();
+
+    let body: SpaceArcSearchApiResponse = api
+        .get_q("/x/space/wbi/arc/search", &borrowed)
+        .await?
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse space video response: {e}"))?;
+
+    validate_space_response(body.code, &body.message)?;
+
+    let data = body.data.unwrap_or_default();
+    let total = data.page.count;
+    let entries = data
+        .list
+        .vlist
+        .into_iter()
+        .filter(|i| !i.bvid.is_empty())
+        .map(space_item_to_entry)
+        .collect();
+
+    Ok((entries, total))
+}
+
+/// Fetches ONE page of an uploader's video list (public Tauri command).
+///
+/// `mid_or_url` accepts a bare mid or a `space.bilibili.com/{mid}` URL.
+pub async fn fetch_space_videos(
+    app: &AppHandle,
+    mid_or_url: String,
+    page: i64,
+) -> Result<Vec<SearchResultEntry>, String> {
+    log::info!(
+        "[BE] fetch_space_videos: input={:?}, page={}",
+        mid_or_url,
+        page
+    );
+    let mid =
+        parse_space_mid(&mid_or_url).ok_or_else(|| "ERR::SPACE_MID_INVALID".to_string())?;
+
+    let cookies = read_cookie(app)?.unwrap_or_default();
+    let header = build_cookie_header(&cookies);
+    let api = BiliApi::from_cookie_header(header)?;
+
+    let result = fetch_space_page_with(&api, mid, page)
+        .await
+        .map(|(entries, _total)| entries);
+    if let Err(e) = &result {
+        log::warn!("[BE] fetch_space_videos: failed: {e}");
+    }
+    result
+}
+
+/// Fetches one page AND reports the uploader's total video count.
+///
+/// Returns `(entries, total_count)`. `total_count == 0` means "unknown"
+/// (Bilibili sometimes omits it) — callers then stop when a page returns
+/// fewer than `SPACE_PAGE_SIZE` entries.
+pub async fn fetch_space_page(
+    app: &AppHandle,
+    mid_or_url: String,
+    page: i64,
+) -> Result<(Vec<SearchResultEntry>, i64), String> {
+    log::info!("[BE] fetch_space_page: input={:?}, page={}", mid_or_url, page);
+    let mid =
+        parse_space_mid(&mid_or_url).ok_or_else(|| "ERR::SPACE_MID_INVALID".to_string())?;
+
+    let cookies = read_cookie(app)?.unwrap_or_default();
+    let header = build_cookie_header(&cookies);
+    let api = BiliApi::from_cookie_header(header)?;
+
+    let result = fetch_space_page_with(&api, mid, page).await;
+    if let Err(e) = &result {
+        log::warn!("[BE] fetch_space_page: failed: {e}");
+    }
+    result
+}
+
+/// Fetches ALL videos of an uploader, page by page, with rate-limit safety.
+///
+/// This is the "download everything from this channel" entry point. It:
+/// - sleeps 1.5s between pages (Bilibili risk control degrades repeated
+///   traffic fast — see the anonymous-search comment in this file),
+/// - stops on: empty page, short page (when total unknown), total reached,
+///   or a hard cap (`MAX_SPACE_PAGES`),
+/// - propagates `ERR::RATE_LIMITED` immediately (retrying makes it worse).
+///
+/// Emits `space-fetch-progress` so the UI can show "page N, X videos so far".
+pub async fn fetch_all_space_videos(
+    app: &AppHandle,
+    mid_or_url: String,
+) -> Result<Vec<SearchResultEntry>, String> {
+    /// Safety cap: 200 pages × 30 = 6000 videos. Raise only if needed.
+    const MAX_SPACE_PAGES: i64 = 200;
+
+    let mid =
+        parse_space_mid(&mid_or_url).ok_or_else(|| "ERR::SPACE_MID_INVALID".to_string())?;
+
+    let cookies = read_cookie(app)?.unwrap_or_default();
+    let header = build_cookie_header(&cookies);
+    let api = BiliApi::from_cookie_header(header)?;
+
+    let mut all: Vec<SearchResultEntry> = Vec::new();
+    let mut page = 1i64;
+    let mut total: i64 = 0;
+
+    loop {
+        if page > MAX_SPACE_PAGES {
+            log::warn!("[BE] fetch_all_space_videos: hit page cap at {page}");
+            break;
+        }
+
+        let (entries, page_total) = fetch_space_page_with(&api, mid, page).await?;
+        if page == 1 {
+            total = page_total;
+        }
+
+        let got = entries.len();
+        all.extend(entries);
+
+        let _ = app.emit(
+            "space-fetch-progress",
+            serde_json::json!({
+                "page": page,
+                "fetched": all.len(),
+                "total": total,
+            }),
+        );
+
+        if got == 0 {
+            break;
+        }
+        if total > 0 && all.len() as i64 >= total {
+            break;
+        }
+        if total == 0 && (got as i64) < SPACE_PAGE_SIZE {
+            break;
+        }
+
+        page += 1;
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+    }
+
+    log::info!(
+        "[BE] fetch_all_space_videos: done, {} videos over {} pages",
+        all.len(),
+        page
+    );
+    Ok(all)
+}
