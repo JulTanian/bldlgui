@@ -12,6 +12,9 @@ import {
   useState,
 } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useNavigate } from 'react-router' // THÊM DÒNG NÀY
+import { invoke } from '@tauri-apps/api/core' // THÊM DÒNG NÀY
+import { listen } from '@tauri-apps/api/event' // THÊM DÒNG NÀY
 import type { SearchHistoryEntry } from '../api/searchHistory'
 import {
   clearSearchHistoryApi,
@@ -23,34 +26,14 @@ import { searchSuggestApi } from '../api/searchSuggest'
 import type { TrendingKeyword } from '../api/searchTrending'
 import { searchTrendingApi } from '../api/searchTrending'
 
-/** Debounce for the suggest fetch — fast enough to feel live, slow enough to
- * avoid a request per keystroke. */
 const SUGGEST_DEBOUNCE_MS = 300
-
-/** Trending keywords change slowly; refetching on every focus would hammer
- * the WBI-signed endpoint for no visible benefit. */
 const TRENDING_CACHE_MS = 5 * 60_000
 
-/** One keyboard-navigable row of the dropdown, regardless of section. */
 type DropdownItem =
   | { kind: 'history'; keyword: string }
   | { kind: 'trending'; keyword: string; label: string }
   | { kind: 'suggest'; keyword: string }
 
-/**
- * Keyword input + submit button with live search suggestions.
- *
- * WAI-ARIA combobox: ↑/↓ move the active option, Enter picks it (Enter with
- * no active option submits the raw draft), Esc closes the dropdown, and
- * focusing the input re-suggests for the current value. Picking a suggestion
- * never re-suggests the committed keyword. The suggest fetch is debounced
- * and best-effort — failures render nothing instead of interrupting typing.
- *
- * With a blank draft the dropdown instead shows the bilibili-style panels:
- * local search history (newest first, with per-item and clear-all delete)
- * plus trending keywords. Both sections form one flat list for keyboard
- * navigation; Delete removes the active history row.
- */
 export function VideoSearchInput({
   onSearch,
   loading,
@@ -58,28 +41,24 @@ export function VideoSearchInput({
 }: {
   onSearch: (keyword: string) => void
   loading: boolean
-  /** External keyword source (the results page's ?q=): keeps the input in
-   * sync when navigation (back/forward) changes it outside this input. */
   keyword?: string
 }) {
   const { t } = useTranslation()
+  const navigate = useNavigate() // THÊM DÒNG NÀY
+  
+  // THÊM STATE CHO TIẾN TRÌNH TẢI KÊNH
+  const [spaceProgress, setSpaceProgress] = useState<string | null>(null)
+
   const [draft, setDraft] = useState('')
   const [suggestions, setSuggestions] = useState<string[]>([])
   const [history, setHistory] = useState<SearchHistoryEntry[]>([])
   const [trending, setTrending] = useState<TrendingKeyword[]>([])
   const [open, setOpen] = useState(false)
   const [activeIndex, setActiveIndex] = useState(-1)
-  // Stale-response guard: only the latest debounce round may set state.
   const latestRound = useRef(0)
   const listId = useId()
   const inputRef = useRef<HTMLInputElement>(null)
-  // Set when a suggestion pick is about to overwrite the draft: the effect
-  // must skip its suggest fetch for that programmatic change (the search
-  // already ran on the picked value).
   const suppressNextSuggest = useRef(false)
-  // Pending suggest debounce timer; submit clears it so a search fired
-  // mid-debounce never spawns a stale fetch that reopens the list over
-  // the results page.
   const suggestTimer = useRef<number | undefined>(undefined)
   const trendingCache = useRef<{ at: number; data: TrendingKeyword[] } | null>(
     null,
@@ -87,8 +66,6 @@ export function VideoSearchInput({
 
   const hasDraft = draft.trim().length > 0
 
-  // The dropdown renders one flat list: suggestions while typing, otherwise
-  // history + trending. Keeping it flat preserves the modulo keyboard nav.
   const items = useMemo<DropdownItem[]>(() => {
     if (hasDraft) {
       return suggestions.map((keyword) => ({
@@ -108,8 +85,6 @@ export function VideoSearchInput({
 
   const dropdownOpen = open && items.length > 0
 
-  // Fetch suggestions for a keyword and open the list on success. Bumping
-  // the round invalidates every earlier in-flight response.
   const requestSuggest = useCallback((keyword: string) => {
     const round = ++latestRound.current
     void searchSuggestApi(keyword)
@@ -120,14 +95,10 @@ export function VideoSearchInput({
         setOpen(values.length > 0)
       })
       .catch(() => {
-        // Best-effort: never surface suggest errors mid-typing.
         if (round === latestRound.current) setOpen(false)
       })
   }, [])
 
-  // Loads the blank-input panels: local history (cheap, always fresh) and
-  // trending (cached). Shares latestRound with requestSuggest so a later
-  // keystroke invalidates an in-flight panel load, and vice versa.
   const loadPanels = useCallback(() => {
     const round = ++latestRound.current
     setOpen(true)
@@ -150,38 +121,21 @@ export function VideoSearchInput({
       .catch(() => {})
   }, [])
 
-  // Removes one history keyword; the command resolves to the updated list so
-  // the panel refreshes in a single round trip. Best-effort like every
-  // suggest-path call.
   const removeHistoryItem = useCallback((keyword: string) => {
-    // Why bump: the focus-time history fetch may still be in flight; its
-    // stale response would otherwise resurrect the removed row (it shares
-    // the round guard with loadPanels).
     latestRound.current++
     void removeSearchHistoryApi(keyword)
       .then((entries) => {
         setHistory(entries)
-        // The list shrank: clear the active row so aria-activedescendant
-        // never points at an option id that no longer exists.
         setActiveIndex(-1)
       })
       .catch(() => {})
   }, [])
 
-  // Draft as of the previous effect run; only a real draft change may bump
-  // the stale-response round below.
   const prevDraft = useRef(draft)
 
   useEffect(() => {
     const draftChanged = prevDraft.current !== draft
     prevDraft.current = draft
-    // Bump the round even for blank/suppressed drafts: an in-flight response
-    // for a previous draft must not re-open the list afterwards.
-    // Why gated on draftChanged: history/trending in the deps re-run this
-    // effect whenever a panel load settles — an unconditional bump there
-    // invalidates the sibling in-flight panel fetch (loadPanels), silently
-    // dropping whichever panel response lands second (the network-bound
-    // trending fetch always loses to the local history read).
     if (draftChanged) latestRound.current++
     if (suppressNextSuggest.current) {
       suppressNextSuggest.current = false
@@ -190,45 +144,20 @@ export function VideoSearchInput({
     if (!hasDraft) {
       setSuggestions([])
       setActiveIndex(-1)
-      // Deleting the text mid-focus falls back to the panels (bilibili-like:
-      // blank draft = history + trending). The panels may never have loaded:
-      // an input focused WITH a keyword (the results page) takes the
-      // suggest path in handleFocus, so fetch them now instead of staying
-      // closed. Why guarded on draftChanged: history/trending in the deps
-      // re-run this effect whenever a panel load settles — without the
-      // guard each settle would refetch via loadPanels in a loop. Why the
-      // focus check: a programmatic draft clear (keyword sync on a hidden
-      // page) must not fetch or open anything.
       if (draftChanged && document.activeElement === inputRef.current) {
         loadPanels()
       } else {
-        // Not a user-driven blanking: either a panel load just settled
-        // (recompute open — opens now that data arrived) or focus is
-        // elsewhere / panels still empty (stay closed).
         setOpen(history.length > 0 || trending.length > 0)
       }
       return
     }
-    // Why: window. selects the DOM overload so the timer id stays number for
-    // the number-typed ref — bare setTimeout returns NodeJS.Timeout under the
-    // installed @types/node (same pattern as VideoPreviewDialog.tsx saveTimer).
     suggestTimer.current = window.setTimeout(
       () => requestSuggest(draft.trim()),
       SUGGEST_DEBOUNCE_MS,
     )
     return () => clearTimeout(suggestTimer.current)
-    // history/trending are read only for the blank branch's open decision;
-    // listing them re-runs the effect when panel loads settle, which merely
-    // recomputes that decision. loadPanels is a stable callback ([] deps).
   }, [draft, hasDraft, history, trending, requestSuggest, loadPanels])
 
-  // External keyword sync (back/forward changes ?q= outside this input):
-  // adopt it into the draft. URL navigation wins over any unsubmitted
-  // local edit — the address bar is the source of truth for the results.
-  // Adopting must not open the suggest dropdown (the search already ran on
-  // this keyword) — the suggestion-pick suppression is reused. A
-  // same-value adoption is skipped so the armed flag cannot eat the next
-  // real keystroke's suggest round (React bails out on setDraft then).
   useEffect(() => {
     if (keyword === undefined) return
     if (inputRef.current?.value === keyword) return
@@ -236,32 +165,91 @@ export function VideoSearchInput({
     setDraft(keyword)
   }, [keyword])
 
+  // === HÀM XỬ LÝ TẢI TOÀN BỘ KÊNH (MỚI) ===
+  const handleSpaceDownload = async (spaceUrl: string) => {
+    setSpaceProgress('Đang phân tích trang cá nhân...')
+    try {
+      // 1. Gọi Rust lấy toàn bộ video
+      const unlisten = await listen<any>('space-fetch-progress', (event) => {
+        const { page, fetched, total } = event.payload
+        setSpaceProgress(`Đang lấy trang ${page}... (${fetched}${total > 0 ? `/${total}` : ''} video)`)
+      })
+
+      const videos = await invoke<any[]>('fetch_all_space_videos', { midOrUrl: spaceUrl })
+      unlisten()
+
+      if (videos.length === 0) {
+        setSpaceProgress('Không tìm thấy video nào.')
+        return
+      }
+
+      // 2. Vòng lặp đưa từng video vào hàng đợi tải
+      setSpaceProgress(`Đã tìm thấy ${videos.length} video. Đang ném vào hàng đợi...`)
+      
+      for (let i = 0; i < videos.length; i++) {
+        const video = videos[i]
+        setSpaceProgress(`Đang chuẩn bị video ${i + 1}/${videos.length}...`)
+        
+        // Lấy CID (phần 1)
+        const videoInfo = await invoke<any>('fetch_video_info', { videoId: video.bvid })
+        const part = videoInfo.parts[0]
+        const downloadId = `${video.bvid}-p1-${Date.now()}`
+
+        // Ném vào hàng đợi
+        await invoke('download_video', {
+          options: {
+            bvid: video.bvid,
+            cid: part.cid,
+            filename: video.title,
+            quality: null,
+            audioQuality: null,
+            downloadId: downloadId,
+            parentId: null,
+            durationSeconds: video.duration,
+            thumbnailUrl: video.cover,
+            page: 1,
+            subtitle: null,
+            epId: null,
+            outputDir: null,
+          }
+        })
+
+        // Nghỉ 1 giây tránh bị chặn
+        await new Promise(r => setTimeout(r, 1000))
+      }
+      setSpaceProgress(`Đã ném thành công ${videos.length} video vào trang Downloads!`)
+      setTimeout(() => setSpaceProgress(null), 5000)
+    } catch (err: any) {
+      setSpaceProgress(`Lỗi: ${err.toString()}`)
+    }
+  }
+
   const submit = (keyword: string) => {
-    // Why: Enter can beat both the debounce timer and the suggest fetch it
-    // spawned — clear the pending timer and invalidate in-flight responses,
-    // or their setOpen(true) reopens the list over the results page.
     clearTimeout(suggestTimer.current)
     latestRound.current++
     setOpen(false)
-    // Hand focus back to the page once the search fires, so the closed
-    // dropdown stays closed and results get keyboard focus (YouTube-like).
     inputRef.current?.blur()
-    // Record the keyword locally (bilibili-style search history); the panel
-    // refetches on the next blank focus, so no local echo is needed.
+
+    const trimmed = keyword.trim()
+
+    // KIỂM TRA XEM CÓ PHẢI LINK SPACE KHÔNG
+    if (trimmed.includes('space.bilibili.com')) {
+      void handleSpaceDownload(trimmed)
+      return
+    }
+
+    // KIỂM TRA XEM CÓ PHẢI LINK VIDEO KHÔNG
+    if (trimmed.includes('bilibili.com/video/') || trimmed.includes('b23.tv/')) {
+      navigate({ pathname: '/video', search: `?url=${encodeURIComponent(trimmed)}` })
+      return
+    }
+
+    // NẾU LÀ TỪ KHÓA THÌ TÌM KIẾM NHƯ BÌNH THƯỜNG
     void recordSearchApi(keyword).catch(() => {})
     onSearch(keyword)
   }
 
-  /**
-   * Keyboard controller for the suggestion listbox. With the list closed
-   * (or nothing active) every key falls through so Enter submits the form
-   * with the raw draft.
-   */
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    // Why: WKWebView (Safari engine) reports real keys with
-    // isComposing=true during CJK conversion — Enter/arrows must steer the
-    // IME candidate window, not this listbox, and Enter-to-commit must not
-    // pick the active suggestion.
     if (e.nativeEvent.isComposing) return
     if (!dropdownOpen) return
     const active = activeIndex >= 0 ? items[activeIndex] : undefined
@@ -278,10 +266,6 @@ export function VideoSearchInput({
       (e.key === 'Delete' || (e.key === 'Backspace' && draft.length === 0)) &&
       active?.kind === 'history'
     ) {
-      // Keyboard path for the per-row delete (the × affordance is
-      // mouse-only); history is the only deletable section. Backspace is
-      // included for Apple laptops whose 'delete' key reports 'Backspace' —
-      // gated on an empty draft, where Backspace has no text to erase.
       e.preventDefault()
       removeHistoryItem(active.keyword)
     } else if (e.key === 'Escape') {
@@ -289,26 +273,14 @@ export function VideoSearchInput({
     }
   }
 
-  // Fill the input with a picked suggestion and search it. A same-value pick
-  // triggers React's state bailout (effect never runs), so the suppress flag
-  // is armed only when the draft will actually change.
   const commitPick = (value: string) => {
     if (value !== draft) suppressNextSuggest.current = true
     setDraft(value)
     submit(value)
   }
 
-  /**
-   * Focusing the input re-suggests for the current value so the list is
-   * available right where the user left it (YouTube-like). A blank input
-   * opens the history + trending panels instead (bilibili-like).
-   */
   const handleFocus = () => {
     if (hasDraft) {
-      // Why: skips SUGGEST_DEBOUNCE_MS on purpose — that debounce exists to
-      // batch keystrokes, while focus carries one final value; the focus
-      // test asserts the fetch fires with a 0ms timer advance
-      // (VideoSearchInput.test.tsx).
       requestSuggest(draft.trim())
     } else {
       loadPanels()
@@ -346,11 +318,15 @@ export function VideoSearchInput({
           {t('videoSearch.searchButton')}
         </Button>
       </form>
+
+      {/* HIỂN THỊ TIẾN TRÌNH TẢI KÊNH */}
+      {spaceProgress && (
+        <div className="absolute top-full left-0 z-50 mt-2 w-full rounded-md border bg-popover p-3 text-sm text-blue-500 shadow-md">
+          {spaceProgress}
+        </div>
+      )}
+
       {dropdownOpen && (
-        // Why z-50 (not z-10): the video card grid renders later in the
-        // DOM with its own z-10 overlays (hover-play button); an equal
-        // z-index tie resolves by DOM order, letting that overlay paint
-        // — and hit-test — ABOVE this dropdown.
         <ul
           id={listId}
           role="listbox"
@@ -364,8 +340,6 @@ export function VideoSearchInput({
           {items.map((item, i) => {
             const prevKind = items[i - 1]?.kind
             return (
-              // Why: the same keyword can sit in both history and trending
-              // (independent sources); a keyword-only key would collide.
               <Fragment key={`${item.kind}:${item.keyword}`}>
                 {item.kind === 'history' && prevKind !== 'history' && (
                   <li
@@ -373,15 +347,10 @@ export function VideoSearchInput({
                     className="text-muted-foreground flex items-center justify-between px-3 pt-2 pb-1 text-xs font-medium"
                   >
                     <span>{t('videoSearch.searchHistory')}</span>
-                    {/* Why preventDefault on mousedown: keeps focus on the
-                     input so the wrapper's onBlur never closes the dropdown
-                     before the click. */}
                     <button
                       type="button"
                       onMouseDown={(e) => e.preventDefault()}
                       onClick={() => {
-                        // Why bump: same stale-fetch guard as a single-row
-                        // remove (see removeHistoryItem).
                         latestRound.current++
                         void clearSearchHistoryApi()
                           .then(() => {
@@ -408,8 +377,6 @@ export function VideoSearchInput({
                   id={`${listId}-opt-${i}`}
                   role="option"
                   aria-selected={i === activeIndex}
-                  // Why: preventDefault on mousedown keeps focus on the input so
-                  // the wrapper's onBlur never closes the list before the click.
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={() => commitPick(item.keyword)}
                   onMouseEnter={() => setActiveIndex(i)}
@@ -423,9 +390,6 @@ export function VideoSearchInput({
                       {item.kind === 'trending' ? item.label : item.keyword}
                     </span>
                     {item.kind === 'history' && (
-                      // Mouse-only affordance (aria-hidden keeps the
-                      // redundant control out of the a11y tree); the keyboard
-                      // path is Delete on the active option (handleKeyDown).
                       <span
                         role="button"
                         tabIndex={-1}
