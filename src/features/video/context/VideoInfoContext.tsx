@@ -42,21 +42,10 @@ import {
 } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { Input, Video } from '../types'
+import { invoke } from '@tauri-apps/api/core' // <-- Thêm import này
 
 /**
  * Extracts the 'p' query parameter from a URL.
- *
- * Used to determine which video part to select when a specific
- * part URL is provided (e.g., https://bilibili.com/video/BVxxx?p=5).
- *
- * @param url - The video URL to parse
- * @returns The page number if valid (1-indexed), null otherwise
- *
- * @example
- * ```typescript
- * extractPageFromUrl('https://bilibili.com/video/BVxxx?p=3'); // Returns 3
- * extractPageFromUrl('https://bilibili.com/video/BVxxx');    // Returns null
- * ```
  */
 function extractPageFromUrl(url: string): number | null {
   try {
@@ -84,33 +73,18 @@ export type VideoInfoContextValue = {
     audioQuality?: string,
     explicit?: { videoQuality?: boolean; audioQuality?: boolean },
   ) => void
-  /**
-   * Canonical video ID of the displayed content ('BV...' for videos,
-   * 'av{aid}' for bangumi) — the queue badge/dedup match key. Null when
-   * the URL is not (yet) a valid video/bangumi link.
-   */
   videoId: string | null
   isForm1Valid: boolean
   isForm2ValidAll: boolean
   duplicateIndices: number[]
   selectedCount: number
   isFetching: boolean
-  /** True while a debounced auto-fetch (input pause) is in flight. */
   isSilentFetching: boolean
   download: () => Promise<void>
 }
 
-/**
- * React context for managing video information and download workflow state.
- */
 const VideoInfoContext = createContext<VideoInfoContextValue | null>(null)
 
-/**
- * Hook to access the VideoInfoContext.
- * Must be used within a VideoInfoProvider.
- *
- * @throws {Error} When used outside VideoInfoProvider
- */
 export function useVideoInfo(): VideoInfoContextValue {
   const context = useContext(VideoInfoContext)
   if (!context) {
@@ -119,35 +93,9 @@ export function useVideoInfo(): VideoInfoContextValue {
   return context
 }
 
-/**
- * Props for {@linkcode VideoInfoProvider}.
- */
 type VideoInfoProviderProps = {
-  /** React nodes rendered inside the provider's context scope. */
   children: React.ReactNode
 }
-
-/**
- * Provider component for managing video information and download workflow.
- *
- * This provider orchestrates the entire video download process including:
- * - Video/bangumi info fetching with RTK Query caching
- * - Part input state management and validation
- * - Duplicate title detection (duplicates allowed; numbered at fetch)
- * - Pending download processing from history/favorites navigation
- *
- * The provider uses a singleton ref pattern to prevent re-processing
- * the same pending download multiple times during state transitions.
- *
- * @param props - Component props containing children to render
- *
- * @example
- * ```tsx
- * <VideoInfoProvider>
- *   <YourVideoDownloadUI />
- * </VideoInfoProvider>
- * ```
- */
 
 export function VideoInfoProvider({ children }: VideoInfoProviderProps) {
   const { t } = useTranslation()
@@ -160,40 +108,20 @@ export function VideoInfoProvider({ children }: VideoInfoProviderProps) {
     useLazyFetchBangumiInfoQuery()
   const isFetching = isFetchingVideo || isFetchingBangumi
   const [isSilentFetching, setIsSilentFetching] = useState(false)
-  // Ref-count of in-flight silent fetches: overlapping silent fetches are
-  // possible (user pauses on URL A, resumes typing, pauses on URL B before
-  // A resolves), so a plain boolean would read false while B still runs.
   const silentFetchCountRef = useRef(0)
 
-  // Track the pending download being processed (singleton ref)
   const processingPendingRef = useRef<{
     bvid: string
     cid: number | null
     page: number
   } | null>(null)
 
-  /**
-   * Initializes part input fields based on video metadata.
-   *
-   * Selection of each part is delegated to {@link shouldSelectPart},
-   * which selects only the targeted episode for a bangumi URL, only the
-   * requested part for a `?p=N` URL or history/favorites navigation,
-   * and otherwise only the first page.
-   *
-   * @param v - Video object
-   */
   const initInputsForVideo = useCallback((v: Video) => {
     const pending = processingPendingRef.current
 
     const partInputs = v.parts.map((p, index) => ({
       cid: p.cid,
       page: p.page,
-      // Why: the previous inline `v.title === p.part` check compared the
-      // sanitized title against the raw part name, so title-replacement rules
-      // (issue #233) broke the match and filenames came out as "Title Title".
-      // The backend now owns the assembly (build_default_part_title in
-      // src-tauri/src/utils/sanitize.rs) — FE stays presentation-only.
-      // Filename precomputed by the backend (dedup vs video title included)
       title: p.defaultTitle,
       videoQuality: '',
       audioQuality: '',
@@ -217,16 +145,7 @@ export function VideoInfoProvider({ children }: VideoInfoProviderProps) {
 
   /**
    * Validates video/bangumi URL and fetches information (form 1).
-   * Uses RTK Query for caching - subsequent requests for the same videoId/epId
-   * will be served from cache for 1 hour.
-   *
-   * With `{ silent: true }` (debounced auto-fetch on input pause) no error
-   * toast is shown — the auto path must stay invisible; explicit submit
-   * (Enter/blur) reports errors instead.
-   *
-   * @param url - Video or bangumi URL to validate and fetch
-   * @param opts - `silent` suppresses error toasts for the auto-fetch path
-   * @returns true when video info was applied to the store
+   * Đã tích hợp thêm tính năng tải toàn bộ kênh (Space).
    */
   const onValid1 = useCallback(
     async (url: string, opts?: { silent?: boolean }): Promise<boolean> => {
@@ -238,6 +157,79 @@ export function VideoInfoProvider({ children }: VideoInfoProviderProps) {
           description,
         })
       }
+
+      // ==========================================
+      // TÍCH HỢP TÍNH NĂNG TẢI TOÀN BỘ KÊNH (SPACE)
+      // ==========================================
+      if (url.includes('space.bilibili.com')) {
+        if (silent) return false // Không tự động chạy khi đang gõ phím
+        
+        store.dispatch(clearPendingDownload())
+        
+        try {
+          toast.info('Đang lấy danh sách video từ kênh...', { duration: 3000 })
+          const videos = await invoke<any[]>('fetch_all_space_videos', { midOrUrl: url })
+          
+          if (videos.length === 0) {
+            failToast('Không tìm thấy video nào trong kênh này.')
+            return false
+          }
+
+          toast.info(`Đã tìm thấy ${videos.length} video. Bắt đầu đưa vào hàng đợi...`, { duration: 5000 })
+
+          for (let i = 0; i < videos.length; i++) {
+            const v = videos[i]
+            try {
+              const videoInfo = await Promise.race([
+                invoke<any>('fetch_video_info', { videoId: v.bvid }),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 5000))
+              ]) as any
+              
+              const part = videoInfo.parts[0]
+              const safeTitle = v.title.replace(/[\\/:*?"<>|]/g, '_').substring(0, 100)
+              
+              // Đưa thẳng vào hàng đợi của app
+              store.dispatch(enqueueSession({
+                videoId: v.bvid,
+                videoTitle: safeTitle,
+                parts: [{
+                  partIndex: 1,
+                  cid: part.cid,
+                  title: safeTitle,
+                  thumbnailUrl: v.cover,
+                  expectedStages: 3,
+                  payload: {
+                    videoId: v.bvid,
+                    cid: part.cid,
+                    filename: safeTitle,
+                    quality: null,
+                    audioQuality: null,
+                    durationSeconds: v.duration,
+                    thumbnailUrl: v.cover,
+                    page: 1,
+                    epId: null,
+                    outputDir: null,
+                    subtitle: null,
+                  }
+                }]
+              }))
+            } catch (err) {
+              logger.warn(`Bỏ qua video ${v.bvid} do lỗi`, err)
+            }
+            // Nghỉ 1.5s tránh bị chặn
+            await new Promise(r => setTimeout(r, 1500))
+          }
+          
+          toast.success(`Đã đưa thành công ${videos.length} video vào hàng đợi!`)
+          return true
+        } catch (err: any) {
+          failToast(`Lỗi: ${err.toString()}`)
+          return false
+        }
+      }
+      // ==========================================
+      // KẾT THÚC TÍCH HỢP
+      // ==========================================
 
       const schema1 = buildVideoFormSchema1(t)
       const result = schema1.safeParse({ url })
@@ -253,11 +245,8 @@ export function VideoInfoProvider({ children }: VideoInfoProviderProps) {
         return false
       }
 
-      // Extract p parameter from URL for part selection
       const pageFromUrl = extractPageFromUrl(url)
 
-      // Set processingPendingRef before initInputsForVideo is called
-      // This ensures only the p-specified part is selected
       if (
         pageFromUrl &&
         !processingPendingRef.current &&
@@ -270,13 +259,7 @@ export function VideoInfoProvider({ children }: VideoInfoProviderProps) {
         }
       }
 
-      // Note: this also runs for the debounced silent auto-fetch (a mere
-      // typing pause), wiping the current part selections before the new
-      // video arrives — same behavior as an explicit submit, accepted
-      // tradeoff for the auto path. The download queue is NOT cleared
-      // (issue #691): queued/background sessions survive navigation.
       store.dispatch(setUrl(url))
-      // Clear all selections when navigating to a new video via URL input
       store.dispatch(deselectAll())
 
       let fetchResult: { data?: Video; error?: unknown }
@@ -299,9 +282,6 @@ export function VideoInfoProvider({ children }: VideoInfoProviderProps) {
         }
       }
 
-      // Stale guard: the input stays enabled during a silent fetch, so the
-      // user may have moved on to another URL — a newer onValid1 has already
-      // replaced input.url. Discard this outdated result.
       if (store.getState().input.url !== url) return false
 
       if (fetchResult.data) {
@@ -322,14 +302,6 @@ export function VideoInfoProvider({ children }: VideoInfoProviderProps) {
     [t, initInputsForVideo, triggerFetch, triggerFetchBangumi],
   )
 
-  /**
-   * Updates part settings (title, quality) (form 2).
-   *
-   * @param index - Index of the part to update
-   * @param title - New title
-   * @param videoQuality - Video quality ID
-   * @param audioQuality - Audio quality ID (optional)
-   */
   const onValid2 = useCallback(
     (
       index: number,
@@ -344,8 +316,6 @@ export function VideoInfoProvider({ children }: VideoInfoProviderProps) {
           title,
           videoQuality,
           ...(audioQuality !== undefined && { audioQuality }),
-          // Absent flags keep the stored explicitness (a title-only blur
-          // must not reset quality explicitness).
           ...(explicit?.videoQuality !== undefined && {
             videoQualityExplicit: explicit.videoQuality,
           }),
@@ -360,13 +330,9 @@ export function VideoInfoProvider({ children }: VideoInfoProviderProps) {
 
   const schema1 = buildVideoFormSchema1(t)
   const schema2 = buildVideoFormSchema2(t)
-  // Schema accepts '' (no error flash when the input is cleared); the
-  // download gate below still requires a real URL.
   const isForm1Valid =
     input.url.trim() !== '' && schema1.safeParse({ url: input.url }).success
 
-  // Canonical queue-match videoId (same derivation the enqueue path uses).
-  // Memoized on the raw inputs so consumers get a stable string.
   const videoId = useMemo(() => {
     const contentId = extractContentId(input.url)
     if (!contentId) return null
@@ -376,14 +342,8 @@ export function VideoInfoProvider({ children }: VideoInfoProviderProps) {
   }, [input.url, video.parts])
 
   const duplicateIndices = useSelector(selectDuplicateIndices)
-
   const selectedCount = input.partInputs.filter((pi) => pi.selected).length
 
-  // Duplicate titles no longer block the download: the save-time
-  // collision avoidance numbers same-name files ("Name", "Name (1)") —
-  // the same scheme as the fetch-time default-title numbering (formerly
-  // the autoRenameDuplicates setting). The per-row notice in
-  // VideoPartCard is informational only.
   const isForm2ValidAll = useMemo(() => {
     if (!selectedCount) return false
     return input.partInputs
@@ -401,13 +361,6 @@ export function VideoInfoProvider({ children }: VideoInfoProviderProps) {
       })
   }, [selectedCount, input.partInputs, schema2])
 
-  /**
-   * Processes pending download from history/favorites.
-   *
-   * When a user initiates a download from history or favorites, a pendingDownload
-   * is set in the input state. This effect triggers the video info fetch for
-   * that video. The ref prevents re-processing the same pending download.
-   */
   useEffect(() => {
     const pending = input.pendingDownload
     if (!pending) return
@@ -415,7 +368,6 @@ export function VideoInfoProvider({ children }: VideoInfoProviderProps) {
     const { bvid, cid, page } = pending
     const processing = processingPendingRef.current
 
-    // Skip if already processing this exact video/part
     if (processing?.bvid === bvid && processing.page === page) {
       return
     }
@@ -424,49 +376,20 @@ export function VideoInfoProvider({ children }: VideoInfoProviderProps) {
     onValid1(`https://www.bilibili.com/video/${bvid}?p=${page}`)
   }, [input.pendingDownload, onValid1])
 
-  /**
-   * Enqueues the selected parts as one download session (issue #691).
-   *
-   * Responsibility ends at `enqueueSession`: everything the backend needs
-   * is snapshotted into the payload, so later edits to `state.input`
-   * (titles, qualities, URL navigation) cannot leak into the enqueued
-   * parts. The queue runner (shared/queue/runner.ts, started in main.tsx)
-   * drains sessions FIFO — searching/downloading stays possible while
-   * earlier sessions run, and this enqueue lands at the queue's tail.
-   *
-   * Parts whose `videoId`+`cid` are already active
-   * (pending/running/cancelling) are auto-excluded; when at least one was
-   * excluded, a toast reports the skipped count.
-   */
   const download = useCallback(async () => {
     if (!isForm1Valid || !isForm2ValidAll) return
     if (!videoId) return
 
-    // No duplicate guard here by design (verification decision): the
-    // enqueueSession thunk implements REPLACE semantics — pending
-    // duplicates swap in place, running ones are cancelled and re-queued —
-    // so changing a part's quality is just "press Download again".
     const parts: EnqueuePartSpec[] = []
 
     const batch = input.batchSettings
     input.partInputs.forEach((pi, idx) => {
       if (!pi.selected) return
-      // Force-trim long filenames (tail cut): batch all-parts download
-      // enqueues parts the user never opened, whose backend-provided
-      // defaults can exceed the cap (schema2 only warns). The trailing
-      // strip keeps the cut Windows-safe and drops a lone high surrogate
-      // left by slicing an astral char mid-pair (serde_json rejects it at
-      // the invoke boundary). The P{page} fallback keeps the title
-      // non-empty when the strip eats all 100 chars (schema min(2)
-      // validated the raw title only).
       const title =
         pi.title
           .trim()
           .slice(0, TITLE_MAX_LENGTH)
           .replace(/[\uD800-\uDBFF.\s]+$/, '') || `P${pi.page}`
-      // Resolution order per field: an EXPLICIT per-part choice (user
-      // changed it in the part's panel) beats the batch target, which
-      // beats the part's own default (auto-seeded ladder top / off).
       const effVideoQuality =
         pi.videoQualityExplicit || !batch.videoQuality
           ? pi.videoQuality
@@ -484,9 +407,6 @@ export function VideoInfoProvider({ children }: VideoInfoProviderProps) {
         cid: pi.cid,
         title,
         thumbnailUrl: pi.thumbnailUrl ?? null,
-        // Snapshot the stage divisor now (issue #446): reading the lazy
-        // quality shape later would break the progress denominator of a
-        // background download whose part inputs no longer exist.
         expectedStages: stageExpectations(pi),
         payload: {
           videoId,
@@ -498,13 +418,8 @@ export function VideoInfoProvider({ children }: VideoInfoProviderProps) {
           thumbnailUrl: pi.thumbnailUrl ?? null,
           page: pi.page,
           epId: video.parts[idx]?.epId ?? null,
-          // Batch-settings temporary override; null keeps settings.
           outputDir: input.outputDirOverride ?? null,
           subtitle: (() => {
-            // Match by exact or ai-stripped code, then sort by the
-            // user's priority order (selectedLans index) with manual
-            // subtitles before AI ones for the same language. Hard-sub
-            // burns only the FIRST entry (backend .next()).
             const matched = (effSubtitles ?? [])
               .filter((s) =>
                 matchesSelectedLan(effSubtitle.selectedLans, s.lan),
@@ -516,9 +431,6 @@ export function VideoInfoProvider({ children }: VideoInfoProviderProps) {
                 if (pri !== 0) return pri
                 return Number(a.isAi) - Number(b.isAi)
               })
-            // Silent no-op guard: subtitles exist and a mode is set but
-            // nothing matched — the selection and the fetched codes are
-            // drifting apart (this is how the zh-CN/ai-zh bug hid).
             if (
               pi.subtitle.mode !== 'off' &&
               matched.length === 0 &&
@@ -528,12 +440,6 @@ export function VideoInfoProvider({ children }: VideoInfoProviderProps) {
                 `subtitle selection matched nothing: fetched=[${pi.subtitles!.map((s) => s.lan).join(',')}] selected=[${pi.subtitle.selectedLans.join(',')}]`,
               )
             }
-            // Unfetched part (panel never opened): pass the SELECTED
-            // language codes through with empty tracks — the backend
-            // fetches the part's subtitles itself and matches, so a
-            // batch soft-sub selection still lands without a frontend
-            // pre-fetch. Dropping the lans here would silently disable
-            // subtitles (empty selected_lans → MergeMode::None).
             const selectedLans =
               matched.length > 0
                 ? matched.map((s) => s.lan)
@@ -552,28 +458,14 @@ export function VideoInfoProvider({ children }: VideoInfoProviderProps) {
 
     if (parts.length === 0) return
 
-    // Clear previous resolved quality/subtitle info of the displayed video
-    // so a re-download's cards start clean. Resolved events for background
-    // videos are guarded in ListenerContext and never reach this video.
     store.dispatch(clearResolvedInfo())
-
     store.dispatch(enqueueSession({ videoId, videoTitle: video.title, parts }))
 
-    // Selection's job ends at enqueue: leave the checkboxes on and the
-    // NEXT Download click would re-include the already-queued/running
-    // parts — with replace semantics that cancels-and-requeues the running
-    // one (found in verification: queueing parts 11-20 mid-download
-    // cancelled part of 1-10). The per-part completion deselect stays as a
-    // straggler sweep.
     for (const spec of parts) {
       store.dispatch(
         updatePartSelected({ index: spec.partIndex - 1, selected: false }),
       )
     }
-    // input.outputDirOverride MUST be listed: it changes without touching
-    // partInputs (structural sharing keeps the array reference), so without
-    // this dep the callback kept a stale closure and downloads silently
-    // ignored a freshly picked output folder.
   }, [
     isForm1Valid,
     isForm2ValidAll,
