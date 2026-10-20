@@ -159,7 +159,7 @@ export function VideoInfoProvider({ children }: VideoInfoProviderProps) {
       }
 
             // ==========================================
-                  // ==========================================
+                   // ==========================================
       // TÍCH HỢP TÍNH NĂNG TẢI TOÀN BỘ KÊNH (SPACE)
       // ==========================================
       if (url.includes('space.bilibili.com')) {
@@ -188,26 +188,38 @@ export function VideoInfoProvider({ children }: VideoInfoProviderProps) {
               
               const part = videoInfo.parts[0]
               const safeTitle = v.title.replace(/[\\/:*?"<>|]/g, '_').substring(0, 100)
+              
+              // TÁI SỬ DỤNG CHÍNH XÁC HÀM enqueueSession CỦA DỰ ÁN
+              // Hàm này yêu cầu 1 tham số duy nhất. Chúng ta đã cung cấp đầy đủ các trường cần thiết.
               const downloadId = `${v.bvid}-p1-${Date.now()}-${i}`
-
-              // SỬA LỖI TẠI ĐÂY: Bọc trong { options: ... }
-              await invoke('download_video', { 
-                options: {
-                  bvid: v.bvid,
+              
+              store.dispatch(enqueueSession({
+                videoId: v.bvid,
+                videoTitle: safeTitle,
+                parts: [{
+                  partIndex: 1,
                   cid: part.cid,
-                  filename: safeTitle,
-                  quality: null, 
-                  audioQuality: null,
-                  downloadId: downloadId,
-                  parentId: null,
-                  durationSeconds: v.duration,
+                  title: safeTitle,
                   thumbnailUrl: v.cover,
-                  page: 1,
-                  subtitle: null,
-                  epId: null,
-                  outputDir: null,
-                }
-              })
+                  expectedStages: {
+                    audioStage: true,
+                    mergeStage: true
+                  },
+                  payload: {
+                    videoId: v.bvid,
+                    cid: part.cid,
+                    filename: safeTitle,
+                    quality: null,
+                    audioQuality: null,
+                    durationSeconds: v.duration,
+                    thumbnailUrl: v.cover,
+                    page: 1,
+                    epId: null,
+                    outputDir: null,
+                    subtitle: null,
+                  }
+                }]
+              }))
             } catch (err) {
               logger.warn(`Bỏ qua video ${v.bvid} do lỗi`, err)
             }
