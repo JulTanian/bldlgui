@@ -219,6 +219,9 @@ pub fn run() {
             search_videos,
             search_suggest,
             fetch_popular_videos,
+            fetch_space_videos,
+            fetch_space_page,
+            fetch_all_space_videos,
             fetch_home_recommendations,
             search_trending,
             get_search_history,
@@ -482,6 +485,41 @@ pub fn run() {
 /// # Returns
 ///
 /// Returns `true` if ffmpeg is installed and functional, `false` otherwise.
+/// Fetches one page of an uploader's videos from their space page.
+///
+/// `mid_or_url` accepts a bare numeric mid or a full
+/// `https://space.bilibili.com/{mid}/video` URL.
+#[tauri::command]
+async fn fetch_space_videos(
+    app: AppHandle,
+    mid_or_url: String,
+    page: i64,
+) -> Result<Vec<bilibili::SearchResultEntry>, String> {
+    bilibili::fetch_space_videos(&app, mid_or_url, page).await
+}
+
+/// Fetches one page of an uploader's videos AND their total video count.
+///
+/// Returns `(entries, total)`; `total == 0` means the count was unavailable
+/// and callers should stop on a short page instead.
+#[tauri::command]
+async fn fetch_space_page(
+    app: AppHandle,
+    mid_or_url: String,
+    page: i64,
+) -> Result<(Vec<bilibili::SearchResultEntry>, i64), String> {
+    bilibili::fetch_space_page(&app, mid_or_url, page).await
+}
+
+/// Fetches ALL videos from an uploader's space, paginating with rate-limit
+/// safety (1.5s between pages). Emits `space-fetch-progress` per page.
+#[tauri::command]
+async fn fetch_all_space_videos(
+    app: AppHandle,
+    mid_or_url: String,
+) -> Result<Vec<bilibili::SearchResultEntry>, String> {
+    bilibili::fetch_all_space_videos(&app, mid_or_url).await
+}
 #[tauri::command]
 async fn validate_ffmpeg(app: AppHandle) -> bool {
     ffmpeg::validate_ffmpeg(&app).await
