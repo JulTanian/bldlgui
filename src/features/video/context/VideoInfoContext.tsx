@@ -148,7 +148,7 @@ export function VideoInfoProvider({ children }: VideoInfoProviderProps) {
         })
       }
 
-            // ==========================================
+                  // ==========================================
       // TÍCH HỢP TÍNH NĂNG TẢI TOÀN BỘ KÊNH (SPACE)
       // ==========================================
       if (url.includes('space.bilibili.com')) {
@@ -159,9 +159,8 @@ export function VideoInfoProvider({ children }: VideoInfoProviderProps) {
         try {
           toast.info('Đang lấy danh sách video từ kênh...', { duration: 3000 })
           
-          // SỬA LỖI TẠI ĐÂY: Dùng đúng cú pháp của hàm invoke
-          const videos = await invoke<any[]>('fetch_all_space_videos', { 
-            midOrUrl: url 
+          const videos = await invoke<any[]>('fetch_all_space_videos', {
+            midOrUrl: url,
           })
           
           if (videos.length === 0) {
@@ -174,14 +173,15 @@ export function VideoInfoProvider({ children }: VideoInfoProviderProps) {
           for (let i = 0; i < videos.length; i++) {
             const v = videos[i]
             try {
-              // SỬA LỖI TẠI ĐÂY: Bọc trong mảng cho Promise.race
-              const videoInfo = await Promise.race([
-                invoke<any>('fetch_video_info', { 
-                  videoId: v.bvid 
-                }),
-                new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 5000))
-              ]) as any
+              // BỎ Promise.race, dùng invoke trực tiếp
+              const videoInfo = await invoke<any>('fetch_video_info', {
+                videoId: v.bvid,
+              })
               
+              if (!videoInfo || !videoInfo.parts || videoInfo.parts.length === 0) {
+                throw new Error('Video không có part nào')
+              }
+
               const part = videoInfo.parts[0]
               const safeTitle = v.title.replace(/[\\/:*?"<>|]/g, '_').substring(0, 100)
               
@@ -215,7 +215,8 @@ export function VideoInfoProvider({ children }: VideoInfoProviderProps) {
             } catch (err) {
               logger.warn(`Bỏ qua video ${v.bvid} do lỗi`, err)
             }
-            await new Promise(r => setTimeout(r, 1500))
+            // Nghỉ 1.5s giữa các video
+            await new Promise((resolve) => setTimeout(resolve, 1500))
           }
           
           toast.success(`Đã đưa thành công ${videos.length} video vào hàng đợi!`)
@@ -225,6 +226,9 @@ export function VideoInfoProvider({ children }: VideoInfoProviderProps) {
           return false
         }
       }
+      // ==========================================
+      // KẾT THÚC TÍCH HỢP
+      // ==========================================
       // ==========================================
       // KẾT THÚC TÍCH HỢP
       // ==========================================
