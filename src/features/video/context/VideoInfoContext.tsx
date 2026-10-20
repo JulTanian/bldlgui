@@ -42,11 +42,8 @@ import {
 } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { Input, Video } from '../types'
-import { invoke } from '@tauri-apps/api/core' // <-- Thêm import này
+import { invoke } from '@tauri-apps/api/core'
 
-/**
- * Extracts the 'p' query parameter from a URL.
- */
 function extractPageFromUrl(url: string): number | null {
   try {
     const pParam = new URL(url).searchParams.get('p')
@@ -58,9 +55,6 @@ function extractPageFromUrl(url: string): number | null {
   }
 }
 
-/**
- * Context value type for VideoInfoProvider.
- */
 export type VideoInfoContextValue = {
   progress: RootState['progress']
   video: Video
@@ -143,10 +137,6 @@ export function VideoInfoProvider({ children }: VideoInfoProviderProps) {
     }
   }, [])
 
-  /**
-   * Validates video/bangumi URL and fetches information (form 1).
-   * Đã tích hợp thêm tính năng tải toàn bộ kênh (Space).
-   */
   const onValid1 = useCallback(
     async (url: string, opts?: { silent?: boolean }): Promise<boolean> => {
       const silent = opts?.silent ?? false
@@ -158,8 +148,7 @@ export function VideoInfoProvider({ children }: VideoInfoProviderProps) {
         })
       }
 
-            // ==========================================
-                 // ==========================================
+      // ==========================================
       // TÍCH HỢP TÍNH NĂNG TẢI TOÀN BỘ KÊNH (SPACE)
       // ==========================================
       if (url.includes('space.bilibili.com')) {
@@ -170,7 +159,6 @@ export function VideoInfoProvider({ children }: VideoInfoProviderProps) {
         try {
           toast.info('Đang lấy danh sách video từ kênh...', { duration: 3000 })
           
-          // SỬA LỖI TẠI ĐÂY: Gói trong 1 object duy nhất
           const videos = await invoke<any[]>('fetch_all_space_videos', {
             midOrUrl: url,
           })
@@ -185,7 +173,6 @@ export function VideoInfoProvider({ children }: VideoInfoProviderProps) {
           for (let i = 0; i < videos.length; i++) {
             const v = videos[i]
             try {
-              // SỬA LỖI TẠI ĐÂY: Gói trong 1 object duy nhất
               const videoInfo = await Promise.race([
                 invoke<any>('fetch_video_info', {
                   videoId: v.bvid,
