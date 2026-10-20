@@ -148,7 +148,7 @@ export function VideoInfoProvider({ children }: VideoInfoProviderProps) {
         })
       }
 
-      // ==========================================
+            // ==========================================
       // TÍCH HỢP TÍNH NĂNG TẢI TOÀN BỘ KÊNH (SPACE)
       // ==========================================
       if (url.includes('space.bilibili.com')) {
@@ -159,8 +159,9 @@ export function VideoInfoProvider({ children }: VideoInfoProviderProps) {
         try {
           toast.info('Đang lấy danh sách video từ kênh...', { duration: 3000 })
           
-          const videos = await invoke<any[]>('fetch_all_space_videos', {
-            midOrUrl: url,
+          // SỬA LỖI TẠI ĐÂY: Dùng đúng cú pháp của hàm invoke
+          const videos = await invoke<any[]>('fetch_all_space_videos', { 
+            midOrUrl: url 
           })
           
           if (videos.length === 0) {
@@ -173,9 +174,10 @@ export function VideoInfoProvider({ children }: VideoInfoProviderProps) {
           for (let i = 0; i < videos.length; i++) {
             const v = videos[i]
             try {
+              // SỬA LỖI TẠI ĐÂY: Bọc trong mảng cho Promise.race
               const videoInfo = await Promise.race([
-                invoke<any>('fetch_video_info', {
-                  videoId: v.bvid,
+                invoke<any>('fetch_video_info', { 
+                  videoId: v.bvid 
                 }),
                 new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 5000))
               ]) as any
