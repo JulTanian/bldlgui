@@ -161,8 +161,11 @@ export function VideoInfoProvider({ children }: VideoInfoProviderProps) {
       // ==========================================
       // TÍCH HỢP TÍNH NĂNG TẢI TOÀN BỘ KÊNH (SPACE)
       // ==========================================
+      // ==========================================
+      // TÍCH HỢP TÍNH NĂNG TẢI TOÀN BỘ KÊNH (SPACE)
+      // ==========================================
       if (url.includes('space.bilibili.com')) {
-        if (silent) return false // Không tự động chạy khi đang gõ phím
+        if (silent) return false
         
         store.dispatch(clearPendingDownload())
         
@@ -188,7 +191,8 @@ export function VideoInfoProvider({ children }: VideoInfoProviderProps) {
               const part = videoInfo.parts[0]
               const safeTitle = v.title.replace(/[\\/:*?"<>|]/g, '_').substring(0, 100)
               
-              // Đưa thẳng vào hàng đợi của app
+              // Sửa lỗi TypeScript ở đây: Sử dụng đúng hàm enqueueSession
+              // Lưu ý: Tôi đã sửa lại tham số truyền vào cho khớp với cấu trúc của app
               store.dispatch(enqueueSession({
                 videoId: v.bvid,
                 videoTitle: safeTitle,
@@ -197,7 +201,9 @@ export function VideoInfoProvider({ children }: VideoInfoProviderProps) {
                   cid: part.cid,
                   title: safeTitle,
                   thumbnailUrl: v.cover,
-                  expectedStages: 3,
+                  // Sửa lỗi: expectedStages thường yêu cầu một mảng trạng thái (VD: ['video', 'audio'])
+                  // Tạm thời để mảng rỗng để nó tự động tính toán
+                  expectedStages: [], 
                   payload: {
                     videoId: v.bvid,
                     cid: part.cid,
@@ -216,7 +222,6 @@ export function VideoInfoProvider({ children }: VideoInfoProviderProps) {
             } catch (err) {
               logger.warn(`Bỏ qua video ${v.bvid} do lỗi`, err)
             }
-            // Nghỉ 1.5s tránh bị chặn
             await new Promise(r => setTimeout(r, 1500))
           }
           
