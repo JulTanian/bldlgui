@@ -158,10 +158,7 @@ export function VideoInfoProvider({ children }: VideoInfoProviderProps) {
         })
       }
 
-      // ==========================================
-      // TÍCH HỢP TÍNH NĂNG TẢI TOÀN BỘ KÊNH (SPACE)
-      // ==========================================
-      // ==========================================
+            // ==========================================
       // TÍCH HỢP TÍNH NĂNG TẢI TOÀN BỘ KÊNH (SPACE)
       // ==========================================
       if (url.includes('space.bilibili.com')) {
@@ -180,9 +177,11 @@ export function VideoInfoProvider({ children }: VideoInfoProviderProps) {
 
           toast.info(`Đã tìm thấy ${videos.length} video. Bắt đầu đưa vào hàng đợi...`, { duration: 5000 })
 
+          // Duyệt qua từng video và đưa vào hàng đợi
           for (let i = 0; i < videos.length; i++) {
             const v = videos[i]
             try {
+              // 1. Lấy thông tin chi tiết (để lấy CID)
               const videoInfo = await Promise.race([
                 invoke<any>('fetch_video_info', { videoId: v.bvid }),
                 new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 5000))
@@ -191,37 +190,32 @@ export function VideoInfoProvider({ children }: VideoInfoProviderProps) {
               const part = videoInfo.parts[0]
               const safeTitle = v.title.replace(/[\\/:*?"<>|]/g, '_').substring(0, 100)
               
-              // Sửa lỗi TypeScript ở đây: Sử dụng đúng hàm enqueueSession
-              // Lưu ý: Tôi đã sửa lại tham số truyền vào cho khớp với cấu trúc của app
-              store.dispatch(enqueueSession({
-                videoId: v.bvid,
-                videoTitle: safeTitle,
-                parts: [{
-                  partIndex: 1,
+              // 2. Tạo mã downloadId duy nhất
+              const downloadId = `${v.bvid}-p1-${Date.now()}-${i}`
+
+              // 3. Gọi thẳng lệnh tải của backend (nó sẽ tự đưa vào hàng đợi ngầm)
+              // Bỏ qua enqueueSession phức tạp của Frontend
+              await invoke('download_video', {
+                options: {
+                  bvid: v.bvid,
                   cid: part.cid,
-                  title: safeTitle,
+                  filename: safeTitle,
+                  quality: null, // Tự động chọn nét cao nhất
+                  audioQuality: null,
+                  downloadId: downloadId,
+                  parentId: null,
+                  durationSeconds: v.duration,
                   thumbnailUrl: v.cover,
-                  // Sửa lỗi: expectedStages thường yêu cầu một mảng trạng thái (VD: ['video', 'audio'])
-                  // Tạm thời để mảng rỗng để nó tự động tính toán
-                  expectedStages: [], 
-                  payload: {
-                    videoId: v.bvid,
-                    cid: part.cid,
-                    filename: safeTitle,
-                    quality: null,
-                    audioQuality: null,
-                    durationSeconds: v.duration,
-                    thumbnailUrl: v.cover,
-                    page: 1,
-                    epId: null,
-                    outputDir: null,
-                    subtitle: null,
-                  }
-                }]
-              }))
+                  page: 1,
+                  subtitle: null,
+                  epId: null,
+                  outputDir: null,
+                }
+              })
             } catch (err) {
               logger.warn(`Bỏ qua video ${v.bvid} do lỗi`, err)
             }
+            // Nghỉ 1.5 giây tránh bị Bilibili chặn
             await new Promise(r => setTimeout(r, 1500))
           }
           
