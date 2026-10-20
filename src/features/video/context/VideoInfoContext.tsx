@@ -148,7 +148,7 @@ export function VideoInfoProvider({ children }: VideoInfoProviderProps) {
         })
       }
 
-                  // ==========================================
+                        // ==========================================
       // TÍCH HỢP TÍNH NĂNG TẢI TOÀN BỘ KÊNH (SPACE)
       // ==========================================
       if (url.includes('space.bilibili.com')) {
@@ -173,7 +173,6 @@ export function VideoInfoProvider({ children }: VideoInfoProviderProps) {
           for (let i = 0; i < videos.length; i++) {
             const v = videos[i]
             try {
-              // BỎ Promise.race, dùng invoke trực tiếp
               const videoInfo = await invoke<any>('fetch_video_info', {
                 videoId: v.bvid,
               })
@@ -184,38 +183,27 @@ export function VideoInfoProvider({ children }: VideoInfoProviderProps) {
 
               const part = videoInfo.parts[0]
               const safeTitle = v.title.replace(/[\\/:*?"<>|]/g, '_').substring(0, 100)
-              
-              store.dispatch(enqueueSession({
-                videoId: v.bvid,
-                videoTitle: safeTitle,
-                parts: [{
-                  partIndex: 1,
-                  cid: part.cid,
-                  title: safeTitle,
-                  thumbnailUrl: v.cover,
-                  expectedStages: {
-                    audioStage: true,
-                    mergeStage: true
-                  },
-                  payload: {
-                    videoId: v.bvid,
-                    cid: part.cid,
-                    filename: safeTitle,
-                    quality: null,
-                    audioQuality: null,
-                    durationSeconds: v.duration,
-                    thumbnailUrl: v.cover,
-                    page: 1,
-                    epId: null,
-                    outputDir: null,
-                    subtitle: null,
-                  }
-                }]
-              }))
+              const downloadId = `${v.bvid}-p1-${Date.now()}-${i}`
+
+              // GỌI THẲNG BACKEND, KHÔNG DÙNG enqueueSession NỮA
+              await invoke('download_video', {
+                bvid: v.bvid,
+                cid: part.cid,
+                filename: safeTitle,
+                quality: null,
+                audioQuality: null,
+                downloadId: downloadId,
+                parentId: null,
+                durationSeconds: v.duration,
+                thumbnailUrl: v.cover,
+                page: 1,
+                subtitle: null,
+                epId: null,
+                outputDir: null,
+              })
             } catch (err) {
               logger.warn(`Bỏ qua video ${v.bvid} do lỗi`, err)
             }
-            // Nghỉ 1.5s giữa các video
             await new Promise((resolve) => setTimeout(resolve, 1500))
           }
           
@@ -226,12 +214,7 @@ export function VideoInfoProvider({ children }: VideoInfoProviderProps) {
           return false
         }
       }
-      // ==========================================
-      // KẾT THÚC TÍCH HỢP
-      // ==========================================
-      // ==========================================
-      // KẾT THÚC TÍCH HỢP
-      // ==========================================
+      
 
       const schema1 = buildVideoFormSchema1(t)
       const result = schema1.safeParse({ url })
