@@ -2,11 +2,20 @@ import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
+interface SearchResultEntry {
+  bvid: string;
+  title: string;
+  cover: string;
+  author: string;
+  play: number;
+  duration: number;
+}
+
 export function SpaceDownloader() {
   const [url, setUrl] = useState("");
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState("");
-  const [videos, setVideos] = useState<any[]>([]);
+  const [videos, setVideos] = useState<SearchResultEntry[]>([]);
   const [error, setError] = useState("");
 
   const handleFetch = async () => {
@@ -17,14 +26,16 @@ export function SpaceDownloader() {
     setProgress("Đang kết nối...");
 
     // Lắng nghe tiến trình từ Rust gửi lên
-    const unlisten = await listen("space-fetch-progress", (event: any) => {
+    const unlisten = await listen<any>("space-fetch-progress", (event) => {
       const { page, fetched, total } = event.payload;
-      setProgress(`Đang lấy trang ${page}... (Đã lấy ${fetched}${total > 0 ? `/${total}` : ""} video)`);
+      setProgress(
+        `Đang lấy trang ${page}... (Đã lấy ${fetched}${total > 0 ? `/${total}` : ""} video)`
+      );
     });
 
     try {
       // Gọi hàm Rust
-      const result = await invoke<any[]>("fetch_all_space_videos", { midOrUrl: url });
+      const result = await invoke<SearchResultEntry[]>("fetch_all_space_videos", { midOrUrl: url });
       setVideos(result);
       setProgress(`Hoàn tất! Đã lấy được ${result.length} video.`);
     } catch (err: any) {
@@ -37,8 +48,8 @@ export function SpaceDownloader() {
   };
 
   return (
-    <div className="p-4 border rounded-lg shadow-sm bg-background">
-      <h2 className="text-lg font-bold mb-2">Tải toàn bộ kênh Bilibili</h2>
+    <div className="p-4 border rounded-lg shadow-sm bg-background max-w-2xl mx-auto mt-8">
+      <h2 className="text-lg font-bold mb-2">Tải toàn bộ kênh Bilibili (Custom)</h2>
       <div className="flex gap-2 mb-4">
         <input
           type="text"
