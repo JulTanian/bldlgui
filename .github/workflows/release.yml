@@ -139,10 +139,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: 'macos-latest' # Apple Silicon (M1+)
-            args: '--target aarch64-apple-darwin'
-          - platform: 'macos-latest' # Intel
-            args: '--target x86_64-apple-darwin'
           # Why pinned to 24.04 (not ubuntu-latest): the glibc baseline of the
           # Linux artifacts follows the build image (2.39 on noble), and the
           # README documents that baseline — ubuntu-latest would silently bump
