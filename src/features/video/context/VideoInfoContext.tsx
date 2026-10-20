@@ -159,7 +159,7 @@ export function VideoInfoProvider({ children }: VideoInfoProviderProps) {
       }
 
             // ==========================================
-            // ==========================================
+                  // ==========================================
       // TÍCH HỢP TÍNH NĂNG TẢI TOÀN BỘ KÊNH (SPACE)
       // ==========================================
       if (url.includes('space.bilibili.com')) {
@@ -190,21 +190,23 @@ export function VideoInfoProvider({ children }: VideoInfoProviderProps) {
               const safeTitle = v.title.replace(/[\\/:*?"<>|]/g, '_').substring(0, 100)
               const downloadId = `${v.bvid}-p1-${Date.now()}-${i}`
 
-              // SỬA LỖI Ở ĐÂY: Gói object vào trong 1 tham số duy nhất
-              await invoke('download_video', {
-                bvid: v.bvid,
-                cid: part.cid,
-                filename: safeTitle,
-                quality: null, 
-                audioQuality: null,
-                downloadId: downloadId,
-                parentId: null,
-                durationSeconds: v.duration,
-                thumbnailUrl: v.cover,
-                page: 1,
-                subtitle: null,
-                epId: null,
-                outputDir: null,
+              // SỬA LỖI TẠI ĐÂY: Bọc trong { options: ... }
+              await invoke('download_video', { 
+                options: {
+                  bvid: v.bvid,
+                  cid: part.cid,
+                  filename: safeTitle,
+                  quality: null, 
+                  audioQuality: null,
+                  downloadId: downloadId,
+                  parentId: null,
+                  durationSeconds: v.duration,
+                  thumbnailUrl: v.cover,
+                  page: 1,
+                  subtitle: null,
+                  epId: null,
+                  outputDir: null,
+                }
               })
             } catch (err) {
               logger.warn(`Bỏ qua video ${v.bvid} do lỗi`, err)
